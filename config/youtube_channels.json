@@ -1,12 +1,9 @@
-{
+﻿{
   "channels": [
-    {
-      "name": "OpenAI",
-      "handle": "@OpenAI"
-    },
-    {
-      "name": "Google DeepMind",
-      "handle": "@GoogleDeepMind"
-    }
+    { "name": "原话说", "handle": "@原话说" },
+    { "name": "MoneyXYZ", "handle": "@MoneyXYZ" },
+    { "name": "Dan Koe Talks", "handle": "@DanKoeTalks" },
+    { "name": "Dr.Xiaohui", "handle": "@Dr.Xiaohui" },
+    { "name": "StorytellerFan", "handle": "@StorytellerFan" }
   ]
 }
