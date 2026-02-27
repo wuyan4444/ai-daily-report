@@ -37,6 +37,10 @@ if ($null -ne $doc.PSObject.Properties["llm_daily_overview"]) {
     if (-not [string]::IsNullOrWhiteSpace($v)) { $llmDailyOverview += $v.Trim() }
   }
 }
+if ($llmDailyOverview.Count -eq 0) {
+  Write-Error "Pure-LLM mode requires llm_daily_overview, but none was found."
+  exit 1
+}
 
 function NText {
   param([string]$Text)
@@ -125,41 +129,6 @@ function Get-RecencyLabel {
   return ("{0}天前" -f $AgeDays)
 }
 
-function OneLineFact {
-  param([string]$Snippet)
-  $s = NText -Text $Snippet
-  if ([string]::IsNullOrWhiteSpace($s)) { return "正文证据不足，需打开原文核验。" }
-  $parts = @()
-  foreach ($seg in ($s -split "[;；。]")) {
-    $piece = NText -Text $seg
-    if ([string]::IsNullOrWhiteSpace($piece)) { continue }
-    if ($piece.Length -lt 10) { continue }
-    $parts += $piece
-    if ($parts.Count -ge 1) { break }
-  }
-  if ($parts.Count -eq 0) { return $s.Substring(0, [Math]::Min(60, $s.Length)) }
-  return $parts[0]
-}
-
-function Get-Action {
-  param([string]$Title,[string]$Snippet)
-  $t = NKey -Text ($Title + " " + $Snippet)
-  if ($t.Contains("agent")) { return "把1个重复工作流程写成SOP并用AI跑通一次。" }
-  if ($t.Contains("具身") -or $t.Contains("机器人") -or $t.Contains("空间智能")) { return "记录场景/成本/稳定性三项数据，先观察不追热点。" }
-  if ($t.Contains("监管") -or $t.Contains("政策")) { return "先读政策原文，再看二手解读，避免信息偏差。" }
-  if ($t.Contains("captcha") -or $t.Contains("验证码")) { return "先补充可核验证据，再决定是否纳入重点。" }
-  return '把这条信息改写成"问题-证据-结论-动作"四行卡片。'
-}
-
-function Get-Invest {
-  param([string]$Title,[string]$Snippet)
-  $t = NKey -Text ($Title + " " + $Snippet)
-  if ($t.Contains("agent")) { return "关注有企业落地案例的工作流/Agent产品。" }
-  if ($t.Contains("具身") -or $t.Contains("机器人") -or $t.Contains("空间智能")) { return "关注真实交付能力，而非纯概念叙事。" }
-  if ($t.Contains("监管") -or $t.Contains("政策")) { return "优先看合规能力强、执行稳定的公司。" }
-  return "先看真实需求和复购，再看估值故事。"
-}
-
 $seen = @{}
 $ranked = @()
 foreach ($i in $items) {
@@ -178,6 +147,9 @@ foreach ($i in $items) {
   $llmAction = Get-OptionalText -Obj $i -Name "llm_action"
   $llmInvest = Get-OptionalText -Obj $i -Name "llm_invest"
   $llmConfidence = Get-OptionalText -Obj $i -Name "llm_confidence"
+  if ([string]::IsNullOrWhiteSpace($llmSummary) -or [string]::IsNullOrWhiteSpace($llmAction) -or [string]::IsNullOrWhiteSpace($llmInvest)) {
+    continue
+  }
   $published = Parse-LocalTime -Text $time
   $ageDays = Get-AgeDays -Published $published -RefDate $reportDate
 
@@ -197,14 +169,18 @@ foreach ($i in $items) {
     score = $score
     tier = $tier
     confidence = $confidence
-    fact = OneLineFact -Snippet $snippet
-    action = Get-Action -Title $title -Snippet $snippet
-    invest = Get-Invest -Title $title -Snippet $snippet
+    fact = $llmSummary
+    action = $llmAction
+    invest = $llmInvest
     llmSummary = $llmSummary
     llmAction = $llmAction
     llmInvest = $llmInvest
     llmConfidence = $llmConfidence
   }
+}
+if ($ranked.Count -eq 0) {
+  Write-Error "Pure-LLM mode requires llm-enriched items, but none were found."
+  exit 1
 }
 
 $ordered = @($ranked | Sort-Object @{Expression="score";Descending=$true}, @{Expression="time";Descending=$true})
@@ -229,7 +205,7 @@ if ($llmDailyOverview.Count -gt 0) {
     $lines.Add("- " + (NText -Text $x))
   }
 } elseif ($focus.Count -eq 0) {
-  $lines.Add("- 今日未抓到可直接行动的高价值增量，建议优先检查数据源。")
+  $lines.Add("- 今日未抓到可直接行动的高价值增量。")
 } else {
   $lines.Add("- 今日可执行重点：" + $focus.Count + " 条（已压缩成最小可读版本）。")
 }
@@ -239,20 +215,20 @@ $lines.Add("--------------------------")
 
 $lines.Add("【三条重点】")
 if ($focus.Count -eq 0) {
-  $lines.Add("- 暂无（今日未抓到可执行的新鲜增量，避免用历史内容冒充今日重点）")
+  $lines.Add("- 暂无（今日未抓到可执行的新鲜增量）")
   if ($background.Count -gt 0) {
     $lines.Add("- 背景补课（非今日）：[" + $background[0].recency + "] " + $background[0].title)
-    $bgFact = if ([string]::IsNullOrWhiteSpace($background[0].llmSummary)) { $background[0].fact } else { $background[0].llmSummary }
-    $bgAction = if ([string]::IsNullOrWhiteSpace($background[0].llmAction)) { $background[0].action } else { $background[0].llmAction }
+    $bgFact = $background[0].llmSummary
+    $bgAction = $background[0].llmAction
     $lines.Add("  关键点：" + $bgFact)
     $lines.Add("  你能立刻做：" + $bgAction)
     $lines.Add("  来源：" + $background[0].source + " | " + $background[0].link)
   }
 } else {
   foreach ($it in $focus) {
-    $factText = if ([string]::IsNullOrWhiteSpace($it.llmSummary)) { $it.fact } else { $it.llmSummary }
-    $actionText = if ([string]::IsNullOrWhiteSpace($it.llmAction)) { $it.action } else { $it.llmAction }
-    $investText = if ([string]::IsNullOrWhiteSpace($it.llmInvest)) { $it.invest } else { $it.llmInvest }
+    $factText = $it.llmSummary
+    $actionText = $it.llmAction
+    $investText = $it.llmInvest
     $lines.Add("- [" + $it.tier + "][" + $it.recency + "] " + $it.title)
     $lines.Add("  关键点：" + $factText)
     $lines.Add("  你能立刻做：" + $actionText)
@@ -275,7 +251,7 @@ $lines.Add("- C级说明：主要为低证据或受限来源，默认不展开�
 $lines.Add("--------------------------")
 
 $lines.Add("【今天只做这2件事】")
-$action1 = if ($focus.Count -gt 0) { $focus[0].action } else { "挑一条最近7天的官方信息，写成四行卡片。" }
+$action1 = if ($focus.Count -gt 0) { $focus[0].llmAction } else { "复盘今天信息，并等待明日新增。" }
 $action2 = "把历史参考内容和今日增量分开看，避免被旧内容占用注意力。"
 $lines.Add("- " + $action1)
 $lines.Add("- " + $action2)

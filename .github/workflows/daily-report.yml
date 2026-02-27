@@ -15,6 +15,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate LLM secret
+        shell: powershell
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:LLM_API_KEY)) {
+            Write-Error "Missing required secret: LLM_API_KEY"
+            exit 1
+          }
+
       - name: Generate report and HTML
         shell: powershell
         env:

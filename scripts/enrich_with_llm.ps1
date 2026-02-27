@@ -20,8 +20,8 @@ if (!(Test-Path $inputPath)) {
 }
 
 if ([string]::IsNullOrWhiteSpace($LlmApiKey)) {
-  Write-Output $inputPath
-  exit 0
+  Write-Error "LLM_API_KEY is required in pure-LLM mode."
+  exit 1
 }
 
 function NText {
@@ -90,8 +90,8 @@ if ([string]::IsNullOrWhiteSpace($raw)) {
 $doc = $raw | ConvertFrom-Json
 $items = @($doc.items)
 if ($items.Count -eq 0) {
-  Write-Output $inputPath
-  exit 0
+  Write-Error "No collected items found for date: $Date"
+  exit 1
 }
 
 $candidates = @(
@@ -121,7 +121,10 @@ foreach ($it in $candidates) {
 "@
 
   $parsed = Invoke-LlmJson -Prompt $prompt -ApiKey $LlmApiKey -BaseUrl $LlmBaseUrl -Model $LlmModel
-  if ($null -eq $parsed) { continue }
+  if ($null -eq $parsed) {
+    Write-Error ("LLM parsing failed for item: " + $title)
+    exit 1
+  }
 
   $it | Add-Member -NotePropertyName llm_summary -NotePropertyValue (NText -Text ([string]$parsed.summary)) -Force
   $it | Add-Member -NotePropertyName llm_action -NotePropertyValue (NText -Text ([string]$parsed.action)) -Force
@@ -149,16 +152,20 @@ if ($overviewInput.Count -gt 0) {
 $($overviewInput -join "`n")
 "@
   $ov = Invoke-LlmJson -Prompt $overviewPrompt -ApiKey $LlmApiKey -BaseUrl $LlmBaseUrl -Model $LlmModel
-  if ($null -ne $ov -and $null -ne $ov.overview) {
-    $arr = @()
-    foreach ($x in @($ov.overview)) {
-      $v = NText -Text ([string]$x)
-      if (-not [string]::IsNullOrWhiteSpace($v)) { $arr += $v }
-    }
-    if ($arr.Count -gt 0) {
-      $doc | Add-Member -NotePropertyName llm_daily_overview -NotePropertyValue $arr -Force
-    }
+  if ($null -eq $ov -or $null -eq $ov.overview) {
+    Write-Error "LLM daily overview generation failed."
+    exit 1
   }
+  $arr = @()
+  foreach ($x in @($ov.overview)) {
+    $v = NText -Text ([string]$x)
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $arr += $v }
+  }
+  if ($arr.Count -eq 0) {
+    Write-Error "LLM daily overview is empty."
+    exit 1
+  }
+  $doc | Add-Member -NotePropertyName llm_daily_overview -NotePropertyValue $arr -Force
 }
 
 $doc.items = $items

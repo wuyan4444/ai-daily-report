@@ -25,8 +25,8 @@ After a minute, your report URL is:
 - Name: `FEISHU_WEBHOOK_URL`
 - Value: your Feishu bot webhook URL
 
-### 3) (Optional) Enable LLM summary
-If you want real model-generated interpretation (not only rule-based scoring), add these secrets:
+### 3) Enable LLM summary (Required)
+This repo now runs in pure-LLM mode. Add these secrets:
 
 - `LLM_API_KEY` (required)
 - `LLM_BASE_URL` (optional, default `https://api.openai.com/v1`)
@@ -40,7 +40,7 @@ Examples:
   - `LLM_BASE_URL = https://api.moonshot.cn/v1`
   - `LLM_MODEL = moonshot-v1-8k`
 
-If `LLM_API_KEY` is missing, pipeline auto-falls back to rule-based mode.
+If `LLM_API_KEY` is missing, workflow fails by design.
 
 ### 4) Trigger once manually
 - Repo: `Actions` -> `Daily AI Report` -> `Run workflow`
