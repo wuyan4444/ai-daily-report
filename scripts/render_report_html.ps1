@@ -192,7 +192,7 @@ $html = @"
       <div class="meta">日期：$Date | 自动生成时间：$timestamp</div>
     </section>
     $($sectionHtml -join "`r`n    ")
-    <div class="footer">Powered by GitHub Actions · Tencent AI&amp;S Source</div>
+    <div class="footer">Powered by GitHub Actions · YouTube AI Sources</div>
   </main>
 </body>
 </html>

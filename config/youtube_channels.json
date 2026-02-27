@@ -1,0 +1,12 @@
+{
+  "channels": [
+    {
+      "name": "OpenAI",
+      "handle": "@OpenAI"
+    },
+    {
+      "name": "Google DeepMind",
+      "handle": "@GoogleDeepMind"
+    }
+  ]
+}

@@ -4,7 +4,7 @@ Cloud-run AI daily report website + Feishu link push.
 
 ## What this repo does
 - Runs daily at **09:00 China time** (`01:00 UTC`) via GitHub Actions.
-- Collects AI updates from **Tencent Research AI&S** (prioritizing `AI每日速递/每日动态/九宫格` style posts when available).
+- Collects AI updates from **YouTube channels** (configured in `config/youtube_channels.json`).
 - Builds a concise Chinese report.
 - Generates a web page (`index.html`) and archive page (`report-pages/ai-daily-brief-YYYY-MM-DD.html`).
 - Pushes only the report link to Feishu webhook.
@@ -52,6 +52,24 @@ If `LLM_API_KEY` is missing, workflow fails by design.
 ### 4) Trigger once manually
 - Repo: `Actions` -> `Daily AI Report` -> `Run workflow`
 
+### 5) Configure your YouTube sources
+Edit `config/youtube_channels.json`:
+
+```json
+{
+  "channels": [
+    { "name": "Your Favorite 1", "handle": "@channelHandle" },
+    { "name": "Your Favorite 2", "channel_id": "UCxxxxxxxxxxxxxxxxxxxxxx" }
+  ]
+}
+```
+
+Supported fields per channel:
+- `name`: display name
+- `handle`: YouTube handle (with or without `@`)
+- `channel_id`: YouTube channel id (`UC...`)
+- `url`: optional, channel page URL
+
 ## Schedule
 - Workflow file: `.github/workflows/daily-report.yml`
 - Default cron: `0 1 * * *` (UTC)
@@ -64,5 +82,5 @@ powershell -File scripts/run_cloud_pipeline.ps1
 
 ## Notes
 - This cloud pipeline does not depend on your local computer.
-- If Tencent has no new post on that day, the report will include historical reference items.
+- The collector tries transcript-first for better video content understanding; if transcript is unavailable, it falls back to feed description.
 - To change report style, update `scripts/build_daily_report.ps1` and `scripts/render_report_html.ps1`.
