@@ -35,10 +35,13 @@ jobs:
           }
 
       - name: Push report link to Feishu
-        if: ${{ secrets.FEISHU_WEBHOOK_URL != '' }}
         shell: powershell
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
+          if ([string]::IsNullOrWhiteSpace($env:FEISHU_WEBHOOK_URL)) {
+            Write-Output "FEISHU_WEBHOOK_URL is empty; skip link push."
+            exit 0
+          }
           $dateCn = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Date), "China Standard Time").ToString("yyyy-MM-dd")
           powershell -File scripts/send_link_to_feishu.ps1 -ReportUrl "https://wuyan4444.github.io/ai-daily-report/" -Date $dateCn
