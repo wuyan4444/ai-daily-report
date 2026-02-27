@@ -32,6 +32,20 @@ function NText {
   return $v.Trim()
 }
 
+function Get-OptionalText {
+  param($Obj,[string]$Name)
+  if ($null -eq $Obj) { return "" }
+  if ($null -eq $Obj.PSObject.Properties[$Name]) { return "" }
+  return NText -Text ([string]$Obj.PSObject.Properties[$Name].Value)
+}
+
+function Get-OptionalArray {
+  param($Obj,[string]$Name)
+  if ($null -eq $Obj) { return @() }
+  if ($null -eq $Obj.PSObject.Properties[$Name]) { return @() }
+  return @($Obj.PSObject.Properties[$Name].Value)
+}
+
 function Parse-DateSafe {
   param([string]$Text)
   if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
@@ -173,17 +187,17 @@ foreach ($it in $candidates) {
     }
   }
 
-  $atomicFact = NText -Text ([string]$parsed.atomic_fact)
+  $atomicFact = Get-OptionalText -Obj $parsed -Name "atomic_fact"
   if ([string]::IsNullOrWhiteSpace($atomicFact)) { $atomicFact = $title }
 
   $it | Add-Member -NotePropertyName llm_atomic_fact -NotePropertyValue $atomicFact -Force
-  $it | Add-Member -NotePropertyName llm_importance -NotePropertyValue (NText -Text ([string]$parsed.importance)) -Force
-  $it | Add-Member -NotePropertyName llm_evidence_note -NotePropertyValue (NText -Text ([string]$parsed.evidence_note)) -Force
-  $it | Add-Member -NotePropertyName llm_career_hint -NotePropertyValue (NText -Text ([string]$parsed.career_hint)) -Force
-  $it | Add-Member -NotePropertyName llm_invest_hint -NotePropertyValue (NText -Text ([string]$parsed.invest_hint)) -Force
-  $it | Add-Member -NotePropertyName llm_today_action -NotePropertyValue (NText -Text ([string]$parsed.today_action)) -Force
-  $it | Add-Member -NotePropertyName llm_unknowns -NotePropertyValue (NText -Text ([string]$parsed.unknowns)) -Force
-  $it | Add-Member -NotePropertyName llm_confidence -NotePropertyValue (Normalize-Confidence -Value ([string]$parsed.confidence)) -Force
+  $it | Add-Member -NotePropertyName llm_importance -NotePropertyValue (Get-OptionalText -Obj $parsed -Name "importance") -Force
+  $it | Add-Member -NotePropertyName llm_evidence_note -NotePropertyValue (Get-OptionalText -Obj $parsed -Name "evidence_note") -Force
+  $it | Add-Member -NotePropertyName llm_career_hint -NotePropertyValue (Get-OptionalText -Obj $parsed -Name "career_hint") -Force
+  $it | Add-Member -NotePropertyName llm_invest_hint -NotePropertyValue (Get-OptionalText -Obj $parsed -Name "invest_hint") -Force
+  $it | Add-Member -NotePropertyName llm_today_action -NotePropertyValue (Get-OptionalText -Obj $parsed -Name "today_action") -Force
+  $it | Add-Member -NotePropertyName llm_unknowns -NotePropertyValue (Get-OptionalText -Obj $parsed -Name "unknowns") -Force
+  $it | Add-Member -NotePropertyName llm_confidence -NotePropertyValue (Normalize-Confidence -Value (Get-OptionalText -Obj $parsed -Name "confidence")) -Force
 
   # Keep a compatibility field for older readers.
   $it | Add-Member -NotePropertyName llm_summary -NotePropertyValue $atomicFact -Force
@@ -193,10 +207,10 @@ $overviewInput = New-Object System.Collections.Generic.List[string]
 foreach ($it in ($items | Select-Object -First 8)) {
   $title = NText -Text ([string]$it.title)
   if ([string]::IsNullOrWhiteSpace($title)) { continue }
-  $fact = NText -Text ([string]$it.llm_atomic_fact)
+  $fact = Get-OptionalText -Obj $it -Name "llm_atomic_fact"
   if ([string]::IsNullOrWhiteSpace($fact)) { $fact = NText -Text ([string]$it.snippet) }
-  $evidence = NText -Text ([string]$it.llm_evidence_note)
-  $confidence = Normalize-Confidence -Value ([string]$it.llm_confidence)
+  $evidence = Get-OptionalText -Obj $it -Name "llm_evidence_note"
+  $confidence = Normalize-Confidence -Value (Get-OptionalText -Obj $it -Name "llm_confidence")
   $overviewInput.Add("- 标题：" + $title + " | 事实：" + $fact + " | 证据说明：" + $evidence + " | 置信：" + $confidence)
 }
 
@@ -247,7 +261,7 @@ $($overviewInput -join "`r`n")
   }
 
   $distilledOverview = @()
-  foreach ($x in @($ov.distilled_overview)) {
+  foreach ($x in (Get-OptionalArray -Obj $ov -Name "distilled_overview")) {
     $v = NText -Text ([string]$x)
     if (-not [string]::IsNullOrWhiteSpace($v)) { $distilledOverview += $v }
   }
@@ -256,37 +270,37 @@ $($overviewInput -join "`r`n")
   }
 
   $themeSignals = @()
-  foreach ($p in @($ov.theme_signals)) {
-    $signal = NText -Text ([string]$p.signal)
+  foreach ($p in (Get-OptionalArray -Obj $ov -Name "theme_signals")) {
+    $signal = Get-OptionalText -Obj $p -Name "signal"
     if ([string]::IsNullOrWhiteSpace($signal)) { continue }
     $themeSignals += [pscustomobject]@{
       signal = $signal
-      why = NText -Text ([string]$p.why)
-      how_to_use = NText -Text ([string]$p.how_to_use)
+      why = Get-OptionalText -Obj $p -Name "why"
+      how_to_use = Get-OptionalText -Obj $p -Name "how_to_use"
     }
   }
 
   $decisionCards = @()
-  foreach ($c in @($ov.decision_cards)) {
-    $ifText = NText -Text ([string]$c.if)
-    $thenText = NText -Text ([string]$c.then)
+  foreach ($c in (Get-OptionalArray -Obj $ov -Name "decision_cards")) {
+    $ifText = Get-OptionalText -Obj $c -Name "if"
+    $thenText = Get-OptionalText -Obj $c -Name "then"
     if ([string]::IsNullOrWhiteSpace($ifText) -or [string]::IsNullOrWhiteSpace($thenText)) { continue }
     $decisionCards += [pscustomobject]@{
       if = $ifText
       then = $thenText
-      metric = NText -Text ([string]$c.metric)
+      metric = Get-OptionalText -Obj $c -Name "metric"
     }
   }
 
   $noiseFilters = @()
-  foreach ($n in @($ov.noise_filters)) {
+  foreach ($n in (Get-OptionalArray -Obj $ov -Name "noise_filters")) {
     $v = NText -Text ([string]$n)
     if (-not [string]::IsNullOrWhiteSpace($v)) { $noiseFilters += $v }
   }
   if ($noiseFilters.Count -gt 3) { $noiseFilters = @($noiseFilters | Select-Object -First 3) }
 
   $todayPlan = @()
-  foreach ($a in @($ov.today_plan)) {
+  foreach ($a in (Get-OptionalArray -Obj $ov -Name "today_plan")) {
     $v = NText -Text ([string]$a)
     if (-not [string]::IsNullOrWhiteSpace($v)) { $todayPlan += $v }
   }
