@@ -15,11 +15,12 @@ if ([string]::IsNullOrWhiteSpace($Date)) {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $collectScript = Join-Path $scriptDir "collect_ai_news.ps1"
+$enrichScript = Join-Path $scriptDir "enrich_with_llm.ps1"
 $buildScript = Join-Path $scriptDir "build_daily_report.ps1"
 $renderScript = Join-Path $scriptDir "render_report_html.ps1"
 $linkScript = Join-Path $scriptDir "send_link_to_feishu.ps1"
 
-foreach ($p in @($collectScript, $buildScript, $renderScript, $linkScript)) {
+foreach ($p in @($collectScript, $enrichScript, $buildScript, $renderScript, $linkScript)) {
   if (!(Test-Path $p)) {
     Write-Error "Missing script: $p"
     exit 1
@@ -29,6 +30,12 @@ foreach ($p in @($collectScript, $buildScript, $renderScript, $linkScript)) {
 $newsPath = & $collectScript -Date $Date -OutputDir "data"
 if ([string]::IsNullOrWhiteSpace($newsPath)) {
   Write-Error "Collection failed"
+  exit 1
+}
+
+$enrichedPath = & $enrichScript -Date $Date -InputDir "data"
+if ([string]::IsNullOrWhiteSpace($enrichedPath)) {
+  Write-Error "LLM enrichment failed"
   exit 1
 }
 

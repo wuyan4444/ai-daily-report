@@ -30,6 +30,13 @@ $raw = Get-Content -Path $inputPath -Raw -Encoding UTF8
 $doc = $raw | ConvertFrom-Json
 $items = @($doc.items)
 $reportDate = [datetime]::ParseExact($Date, "yyyy-MM-dd", $null)
+$llmDailyOverview = @()
+if ($null -ne $doc.PSObject.Properties["llm_daily_overview"]) {
+  foreach ($x in @($doc.llm_daily_overview)) {
+    $v = [string]$x
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $llmDailyOverview += $v.Trim() }
+  }
+}
 
 function NText {
   param([string]$Text)
@@ -48,6 +55,13 @@ function Parse-LocalTime {
   param([string]$Text)
   if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
   try { return [datetime]::Parse($Text) } catch { return $null }
+}
+
+function Get-OptionalText {
+  param($Obj,[string]$Name)
+  if ($null -eq $Obj) { return "" }
+  if ($null -eq $Obj.PSObject.Properties[$Name]) { return "" }
+  return NText -Text ([string]$Obj.PSObject.Properties[$Name].Value)
 }
 
 function Get-AgeDays {
@@ -160,6 +174,10 @@ foreach ($i in $items) {
   $time = NText -Text ([string]$i.published_at_local)
   $link = NText -Text ([string]$i.link)
   $snippet = NText -Text ([string]$i.snippet)
+  $llmSummary = Get-OptionalText -Obj $i -Name "llm_summary"
+  $llmAction = Get-OptionalText -Obj $i -Name "llm_action"
+  $llmInvest = Get-OptionalText -Obj $i -Name "llm_invest"
+  $llmConfidence = Get-OptionalText -Obj $i -Name "llm_confidence"
   $published = Parse-LocalTime -Text $time
   $ageDays = Get-AgeDays -Published $published -RefDate $reportDate
 
@@ -182,6 +200,10 @@ foreach ($i in $items) {
     fact = OneLineFact -Snippet $snippet
     action = Get-Action -Title $title -Snippet $snippet
     invest = Get-Invest -Title $title -Snippet $snippet
+    llmSummary = $llmSummary
+    llmAction = $llmAction
+    llmInvest = $llmInvest
+    llmConfidence = $llmConfidence
   }
 }
 
@@ -202,7 +224,11 @@ $historyCount = @($ordered | Where-Object { $_.ageDays -gt 30 }).Count
 
 $lines = New-Object System.Collections.Generic.List[string]
 $lines.Add("【一眼结论】")
-if ($focus.Count -eq 0) {
+if ($llmDailyOverview.Count -gt 0) {
+  foreach ($x in ($llmDailyOverview | Select-Object -First 2)) {
+    $lines.Add("- " + (NText -Text $x))
+  }
+} elseif ($focus.Count -eq 0) {
   $lines.Add("- 今日未抓到可直接行动的高价值增量，建议优先检查数据源。")
 } else {
   $lines.Add("- 今日可执行重点：" + $focus.Count + " 条（已压缩成最小可读版本）。")
@@ -216,16 +242,21 @@ if ($focus.Count -eq 0) {
   $lines.Add("- 暂无（今日未抓到可执行的新鲜增量，避免用历史内容冒充今日重点）")
   if ($background.Count -gt 0) {
     $lines.Add("- 背景补课（非今日）：[" + $background[0].recency + "] " + $background[0].title)
-    $lines.Add("  关键点：" + $background[0].fact)
-    $lines.Add("  你能立刻做：" + $background[0].action)
+    $bgFact = if ([string]::IsNullOrWhiteSpace($background[0].llmSummary)) { $background[0].fact } else { $background[0].llmSummary }
+    $bgAction = if ([string]::IsNullOrWhiteSpace($background[0].llmAction)) { $background[0].action } else { $background[0].llmAction }
+    $lines.Add("  关键点：" + $bgFact)
+    $lines.Add("  你能立刻做：" + $bgAction)
     $lines.Add("  来源：" + $background[0].source + " | " + $background[0].link)
   }
 } else {
   foreach ($it in $focus) {
+    $factText = if ([string]::IsNullOrWhiteSpace($it.llmSummary)) { $it.fact } else { $it.llmSummary }
+    $actionText = if ([string]::IsNullOrWhiteSpace($it.llmAction)) { $it.action } else { $it.llmAction }
+    $investText = if ([string]::IsNullOrWhiteSpace($it.llmInvest)) { $it.invest } else { $it.llmInvest }
     $lines.Add("- [" + $it.tier + "][" + $it.recency + "] " + $it.title)
-    $lines.Add("  关键点：" + $it.fact)
-    $lines.Add("  你能立刻做：" + $it.action)
-    $lines.Add("  投资观察：" + $it.invest)
+    $lines.Add("  关键点：" + $factText)
+    $lines.Add("  你能立刻做：" + $actionText)
+    $lines.Add("  投资观察：" + $investText)
     $lines.Add("  来源：" + $it.source + " | " + $it.link)
     $lines.Add("")
   }

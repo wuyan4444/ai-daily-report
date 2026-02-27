@@ -17,6 +17,10 @@ jobs:
 
       - name: Generate report and HTML
         shell: powershell
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ secrets.LLM_MODEL }}
         run: |
           powershell -File scripts/run_cloud_pipeline.ps1
 
