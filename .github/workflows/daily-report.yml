@@ -1,0 +1,44 @@
+﻿name: Daily AI Report
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 1 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-push:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate report and HTML
+        shell: powershell
+        run: |
+          powershell -File scripts/run_cloud_pipeline.ps1
+
+      - name: Commit and push website updates
+        shell: powershell
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          $hasChanges = git status --porcelain
+          if ($hasChanges) {
+            git add data reports index.html report-pages
+            git commit -m "chore: daily ai report $(Get-Date -Format yyyy-MM-dd)"
+            git push
+          } else {
+            Write-Output "No content changes."
+          }
+
+      - name: Push report link to Feishu
+        if: ${{ secrets.FEISHU_WEBHOOK_URL != '' }}
+        shell: powershell
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          $dateCn = [System.TimeZoneInfo]::ConvertTimeBySystemTimeZoneId((Get-Date), "China Standard Time").ToString("yyyy-MM-dd")
+          powershell -File scripts/send_link_to_feishu.ps1 -ReportUrl "https://wuyan4444.github.io/ai-daily-report/" -Date $dateCn
