@@ -42,8 +42,7 @@ function Get-OptionalText {
   param($Obj,[string]$Name)
   if ($null -eq $Obj) { return "" }
   if ($null -eq $Obj.PSObject.Properties[$Name]) { return "" }
-  return Decode-Text -Text ([string]$Obj.PSObject.Properties[$Name].Value
-  )
+  return Decode-Text -Text ([string]$Obj.PSObject.Properties[$Name].Value)
 }
 
 function Ensure-DefaultSourcesFile {
@@ -140,7 +139,6 @@ function Ensure-TranscriptSupport {
       $script:TranscriptSupportReady = $false
       return $false
     }
-
     & python -m pip install --quiet youtube-transcript-api *> $null
     if ($LASTEXITCODE -ne 0) {
       $script:TranscriptSupportReady = $false
@@ -211,7 +209,7 @@ print(text[:max_chars])
     return ""
   }
 
-  return (Decode-Text -Text ([string]$text))
+  return Decode-Text -Text ([string]$text)
 }
 
 function Add-Item {
@@ -232,14 +230,15 @@ function Add-Item {
   $entry = [ordered]@{
     source_label = $SourceLabel
     query = $Query
-    title = (Decode-Text -Text $Title)
+    title = Decode-Text -Text $Title
     link = $Link.Trim()
     source_host = "youtube.com"
-    channel_name = (Decode-Text -Text $ChannelName)
-    video_id = (Decode-Text -Text $VideoId)
+    channel_name = Decode-Text -Text $ChannelName
+    video_id = Decode-Text -Text $VideoId
     content_type = "video"
+    transcript_available = $true
     published_at_local = if ($null -eq $PublishedLocal) { "" } else { $PublishedLocal.ToString("yyyy-MM-dd HH:mm:ss") }
-    snippet = (Decode-Text -Text $Snippet)
+    snippet = Decode-Text -Text $Snippet
     collected_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
   }
 
@@ -260,29 +259,47 @@ function Collect-YoutubeChannelItems {
   try {
     $xmlText = (Invoke-WebRequest -Uri $feedUrl -TimeoutSec 30 -UseBasicParsing).Content
   } catch {
-    Write-Warning ("YouTube feed fetch failed: " + $ChannelName + " - " + $_.Exception.Message)
-    return @()
+    $msg = "Channel '$ChannelName' fetch failed: $($_.Exception.Message)"
+    Write-Warning $msg
+    return [pscustomobject]@{
+      items = @()
+      scanned = 0
+      with_subtitle = 0
+      without_subtitle = 0
+      warning = $msg
+    }
   }
 
   [xml]$doc = $xmlText
   $ns = New-Object System.Xml.XmlNamespaceManager($doc.NameTable)
   $ns.AddNamespace("atom", "http://www.w3.org/2005/Atom")
   $ns.AddNamespace("yt", "http://www.youtube.com/xml/schemas/2015")
-  $ns.AddNamespace("media", "http://search.yahoo.com/mrss/")
 
   $entries = $doc.SelectNodes("//atom:entry", $ns)
-  if ($null -eq $entries) { return @() }
+  if ($null -eq $entries) {
+    $msg = "Channel '$ChannelName' has no readable feed entries."
+    return [pscustomobject]@{
+      items = @()
+      scanned = 0
+      with_subtitle = 0
+      without_subtitle = 0
+      warning = $msg
+    }
+  }
 
   $rows = @()
-  $count = 0
+  $scanLimit = [Math]::Max($Limit, 5)
+  $scanned = 0
+  $withSubtitle = 0
+  $withoutSubtitle = 0
 
   foreach ($entry in $entries) {
-    if ($count -ge $Limit) { break }
+    if ($scanned -ge $scanLimit) { break }
+    $scanned += 1
 
     $titleNode = $entry.SelectSingleNode("atom:title", $ns)
     $videoNode = $entry.SelectSingleNode("yt:videoId", $ns)
     $publishedNode = $entry.SelectSingleNode("atom:published", $ns)
-    $descNode = $entry.SelectSingleNode("media:group/media:description", $ns)
 
     $title = if ($null -eq $titleNode) { "" } else { $titleNode.InnerText }
     $videoId = if ($null -eq $videoNode) { "" } else { $videoNode.InnerText }
@@ -290,37 +307,46 @@ function Collect-YoutubeChannelItems {
 
     $published = if ($null -eq $publishedNode) { $null } else { Parse-DateSafe -Text $publishedNode.InnerText }
     $link = "https://www.youtube.com/watch?v=" + $videoId
-
-    $description = if ($null -eq $descNode) { "" } else { Decode-Text -Text $descNode.InnerText }
     $transcript = Get-YoutubeTranscriptSnippet -VideoId $videoId -MaxChars $TranscriptChars
 
-    $snippet = ""
-    if (-not [string]::IsNullOrWhiteSpace($transcript) -and $transcript.Length -ge 40) {
-      $snippet = $transcript
-    } elseif (-not [string]::IsNullOrWhiteSpace($description)) {
-      $snippet = $description
-    } else {
-      $snippet = $title
+    if ([string]::IsNullOrWhiteSpace($transcript) -or $transcript.Length -lt 40) {
+      $withoutSubtitle += 1
+      continue
     }
+    $withSubtitle += 1
 
+    if ($rows.Count -ge $Limit) { continue }
     $rows += [pscustomobject]@{
       source_label = "YouTube"
       query = $feedUrl
       title = $title
       link = $link
       published_local = $published
-      snippet = $snippet
+      snippet = $transcript
       channel_name = $ChannelName
       video_id = $videoId
     }
-
-    $count += 1
   }
 
-  return @($rows)
+  $warning = ""
+  if ($scanned -gt 0 -and $withSubtitle -eq 0) {
+    $warning = "Channel '$ChannelName' has no usable subtitles in recent videos and is not suitable for this automation."
+  } elseif ($withoutSubtitle -gt 0) {
+    $warning = "Channel '$ChannelName' has $withoutSubtitle video(s) without usable subtitles and they were skipped."
+  }
+
+  return [pscustomobject]@{
+    items = @($rows)
+    scanned = $scanned
+    with_subtitle = $withSubtitle
+    without_subtitle = $withoutSubtitle
+    warning = $warning
+  }
 }
 
 $allItems = @()
+$collectionWarnings = New-Object System.Collections.Generic.List[string]
+$sourceStats = @()
 $sources = @(Load-YoutubeSources -Path $sourcesPath)
 
 foreach ($src in $sources) {
@@ -329,11 +355,35 @@ foreach ($src in $sources) {
 
   $channelId = Resolve-YoutubeChannelId -Source $src
   if ([string]::IsNullOrWhiteSpace($channelId)) {
-    Write-Warning ("Skip source (channel id unresolved): " + $name)
+    $warn = "Channel '$name' channel_id cannot be resolved; skipped."
+    Write-Warning $warn
+    $collectionWarnings.Add($warn)
+    $sourceStats += [pscustomobject]@{
+      channel_name = $name
+      channel_id = ""
+      scanned = 0
+      with_subtitle = 0
+      without_subtitle = 0
+      kept = 0
+    }
     continue
   }
 
-  $items = @(Collect-YoutubeChannelItems -ChannelId $channelId -ChannelName $name -Limit $MaxItemsPerSource -TranscriptChars $MaxTranscriptChars)
+  $result = Collect-YoutubeChannelItems -ChannelId $channelId -ChannelName $name -Limit $MaxItemsPerSource -TranscriptChars $MaxTranscriptChars
+  if (-not [string]::IsNullOrWhiteSpace([string]$result.warning)) {
+    $collectionWarnings.Add([string]$result.warning)
+  }
+
+  $items = @($result.items)
+  $sourceStats += [pscustomobject]@{
+    channel_name = $name
+    channel_id = $channelId
+    scanned = [int]$result.scanned
+    with_subtitle = [int]$result.with_subtitle
+    without_subtitle = [int]$result.without_subtitle
+    kept = $items.Count
+  }
+
   foreach ($it in $items) {
     Add-Item `
       -Items ([ref]$allItems) `
@@ -346,11 +396,6 @@ foreach ($src in $sources) {
       -ChannelName $name `
       -VideoId $it.video_id
   }
-}
-
-if ($allItems.Count -eq 0) {
-  Write-Error "No YouTube items collected. Check config/youtube_channels.json or network access."
-  exit 1
 }
 
 $sorted = @(
@@ -368,11 +413,27 @@ foreach ($it in $sorted) {
   $deduped += $it
 }
 
+if ($deduped.Count -eq 0) {
+  $collectionWarnings.Add("No subtitle-qualified videos were collected today. Replace channels or add subtitle-friendly sources.")
+}
+
+$uniqueWarnings = @()
+$seenWarn = @{}
+foreach ($w in $collectionWarnings) {
+  $v = Decode-Text -Text ([string]$w)
+  if ([string]::IsNullOrWhiteSpace($v)) { continue }
+  if ($seenWarn.ContainsKey($v)) { continue }
+  $seenWarn[$v] = $true
+  $uniqueWarnings += $v
+}
+
 $payload = [ordered]@{
   date = $Date
   generated_at_local = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
   item_count = $deduped.Count
   source = "youtube"
+  collection_warnings = $uniqueWarnings
+  source_stats = $sourceStats
   items = $deduped
 }
 

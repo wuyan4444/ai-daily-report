@@ -127,9 +127,30 @@ if ([string]::IsNullOrWhiteSpace($raw)) {
 
 $doc = $raw | ConvertFrom-Json
 $items = @($doc.items)
+$collectionWarnings = @()
+if ($null -ne $doc.PSObject.Properties["collection_warnings"]) {
+  foreach ($w in @($doc.collection_warnings)) {
+    $v = NText -Text ([string]$w)
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $collectionWarnings += $v }
+  }
+}
+
 if ($items.Count -eq 0) {
-  Write-Error "No collected items found for date: $Date"
-  exit 1
+  $overview = @("今日未采集到可用字幕视频，自动提纯已跳过。")
+  foreach ($w in ($collectionWarnings | Select-Object -First 1)) {
+    $overview += ("采集提醒：" + $w)
+  }
+
+  $doc | Add-Member -NotePropertyName llm_distilled_overview -NotePropertyValue $overview -Force
+  $doc | Add-Member -NotePropertyName llm_theme_signals -NotePropertyValue @() -Force
+  $doc | Add-Member -NotePropertyName llm_decision_cards -NotePropertyValue @() -Force
+  $doc | Add-Member -NotePropertyName llm_noise_filters -NotePropertyValue @("先确保来源有字幕，再进行自动提纯。") -Force
+  $doc | Add-Member -NotePropertyName llm_today_plan -NotePropertyValue @("替换或新增至少1个带字幕的YouTube频道。", "手动补充1条带字幕视频链接做验证。") -Force
+  $doc | Add-Member -NotePropertyName llm_method -NotePropertyValue "distill-v2-no-items" -Force
+  $doc.items = $items
+  $doc | ConvertTo-Json -Depth 10 | Set-Content -Path $inputPath -Encoding UTF8
+  Write-Output $inputPath
+  exit 0
 }
 
 $candidates = @(
