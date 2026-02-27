@@ -9,9 +9,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$skillDir = Split-Path -Parent $scriptDir
-$inputPath = Join-Path (Join-Path $skillDir $InputDir) ("ai-news-" + $Date + ".json")
-$outputRoot = Join-Path $skillDir $OutputDir
+$repoDir = Split-Path -Parent $scriptDir
+$inputPath = Join-Path (Join-Path $repoDir $InputDir) ("ai-news-" + $Date + ".json")
+$outputRoot = Join-Path $repoDir $OutputDir
 if (!(Test-Path $outputRoot)) {
   New-Item -ItemType Directory -Path $outputRoot | Out-Null
 }
@@ -26,39 +26,12 @@ if (!(Test-Path $inputPath)) {
   exit 1
 }
 
-$raw = Get-Content -Path $inputPath -Raw -Encoding UTF8
-$doc = $raw | ConvertFrom-Json
-$items = @($doc.items)
-$reportDate = [datetime]::ParseExact($Date, "yyyy-MM-dd", $null)
-$llmDailyOverview = @()
-if ($null -ne $doc.PSObject.Properties["llm_daily_overview"]) {
-  foreach ($x in @($doc.llm_daily_overview)) {
-    $v = [string]$x
-    if (-not [string]::IsNullOrWhiteSpace($v)) { $llmDailyOverview += $v.Trim() }
-  }
-}
-if ($llmDailyOverview.Count -eq 0) {
-  Write-Error "Pure-LLM mode requires llm_daily_overview, but none was found."
-  exit 1
-}
-
 function NText {
   param([string]$Text)
   if ([string]::IsNullOrWhiteSpace($Text)) { return "" }
   $v = [System.Net.WebUtility]::HtmlDecode($Text)
   $v = $v -replace "\s+", " "
   return $v.Trim()
-}
-
-function NKey {
-  param([string]$Text)
-  return (NText -Text $Text).ToLowerInvariant()
-}
-
-function Parse-LocalTime {
-  param([string]$Text)
-  if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
-  try { return [datetime]::Parse($Text) } catch { return $null }
 }
 
 function Get-OptionalText {
@@ -68,56 +41,16 @@ function Get-OptionalText {
   return NText -Text ([string]$Obj.PSObject.Properties[$Name].Value)
 }
 
+function Parse-LocalTime {
+  param([string]$Text)
+  if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+  try { return [datetime]::Parse($Text) } catch { return $null }
+}
+
 function Get-AgeDays {
   param([datetime]$Published,[datetime]$RefDate)
   if ($null -eq $Published) { return 9999 }
   return [int](($RefDate.Date - $Published.Date).TotalDays)
-}
-
-function Get-Score {
-  param([string]$Title,[string]$Source,[string]$Snippet,[string]$SourceHost,[int]$AgeDays)
-  $score = 0
-  $t = NKey -Text ($Title + " " + $Source + " " + $Snippet + " " + $SourceHost)
-
-  foreach ($w in @("发布","上线","开源","融资","并购","监管","政策","openai","nvidia","google","microsoft","财报")) {
-    if ($t.Contains($w)) { $score += 5 }
-  }
-  foreach ($w in @("agent","工作流","效率","实战","具身","机器人","空间智能")) {
-    if ($t.Contains($w)) { $score += 3 }
-  }
-  foreach ($w in @("captcha","blocked","验证码","风控拦截","受限")) {
-    if ($t.Contains($w)) { $score -= 6 }
-  }
-
-  if ($t.Contains("腾讯研究院") -or $t.Contains("tisi.org")) { $score += 2 }
-  if ($t.Contains("openai.com") -or $t.Contains("nvidia.com")) { $score += 3 }
-
-  if ($AgeDays -le 1) { $score += 6 }
-  elseif ($AgeDays -le 3) { $score += 4 }
-  elseif ($AgeDays -le 7) { $score += 2 }
-  elseif ($AgeDays -le 30) { $score += 0 }
-  elseif ($AgeDays -le 90) { $score -= 4 }
-  else { $score -= 8 }
-
-  return $score
-}
-
-function Get-Confidence {
-  param([string]$Source,[string]$Snippet)
-  $t = NKey -Text ($Source + " " + $Snippet)
-  if ($t.Contains("captcha") -or $t.Contains("验证码") -or $t.Contains("风控拦截") -or $t.Contains("受限")) { return "低" }
-  if ([string]::IsNullOrWhiteSpace($Snippet)) { return "低" }
-  if ($t.Contains("腾讯研究院") -or $t.Contains("openai") -or $t.Contains("nvidia")) { return "中高" }
-  return "中"
-}
-
-function Get-Tier {
-  param([int]$Score,[string]$Confidence)
-  if ($Confidence -eq "低") { return "C" }
-  if ($Score -ge 14) { return "S" }
-  if ($Score -ge 9) { return "A" }
-  if ($Score -ge 4) { return "B" }
-  return "C"
 }
 
 function Get-RecencyLabel {
@@ -129,132 +62,230 @@ function Get-RecencyLabel {
   return ("{0}天前" -f $AgeDays)
 }
 
+function Normalize-Confidence {
+  param([string]$Value)
+  $v = NText -Text $Value
+  if ($v -eq "高" -or $v -eq "中" -or $v -eq "低") { return $v }
+  return "中"
+}
+
+$raw = Get-Content -Path $inputPath -Raw -Encoding UTF8
+$doc = $raw | ConvertFrom-Json
+$items = @($doc.items)
+if ($items.Count -eq 0) {
+  Write-Error "No items found in input data."
+  exit 1
+}
+
+$reportDate = [datetime]::ParseExact($Date, "yyyy-MM-dd", $null)
 $seen = @{}
-$ranked = @()
+$cards = @()
+
 foreach ($i in $items) {
   $title = NText -Text ([string]$i.title)
   if ([string]::IsNullOrWhiteSpace($title)) { continue }
-  $key = NKey -Text $title
+
+  $key = $title.ToLowerInvariant()
   if ($seen.ContainsKey($key)) { continue }
   $seen[$key] = $true
 
   $source = NText -Text ([string]$i.source_label)
-  $sourceHost = NText -Text ([string]$i.source_host)
-  $time = NText -Text ([string]$i.published_at_local)
   $link = NText -Text ([string]$i.link)
-  $snippet = NText -Text ([string]$i.snippet)
-  $llmSummary = Get-OptionalText -Obj $i -Name "llm_summary"
-  $llmAction = Get-OptionalText -Obj $i -Name "llm_action"
-  $llmInvest = Get-OptionalText -Obj $i -Name "llm_invest"
-  $llmConfidence = Get-OptionalText -Obj $i -Name "llm_confidence"
-  if ([string]::IsNullOrWhiteSpace($llmSummary) -or [string]::IsNullOrWhiteSpace($llmAction) -or [string]::IsNullOrWhiteSpace($llmInvest)) {
-    continue
-  }
-  $published = Parse-LocalTime -Text $time
+  $publishedText = NText -Text ([string]$i.published_at_local)
+  $published = Parse-LocalTime -Text $publishedText
   $ageDays = Get-AgeDays -Published $published -RefDate $reportDate
 
-  $score = Get-Score -Title $title -Source $source -Snippet $snippet -SourceHost $sourceHost -AgeDays $ageDays
-  $confidence = Get-Confidence -Source $source -Snippet $snippet
-  $tier = Get-Tier -Score $score -Confidence $confidence
+  $atomicFact = Get-OptionalText -Obj $i -Name "llm_atomic_fact"
+  if ([string]::IsNullOrWhiteSpace($atomicFact)) { $atomicFact = Get-OptionalText -Obj $i -Name "llm_summary" }
+  if ([string]::IsNullOrWhiteSpace($atomicFact)) { $atomicFact = NText -Text ([string]$i.snippet) }
+  if ([string]::IsNullOrWhiteSpace($atomicFact)) { $atomicFact = $title }
 
-  $ranked += [pscustomobject]@{
+  $importance = Get-OptionalText -Obj $i -Name "llm_importance"
+  if ([string]::IsNullOrWhiteSpace($importance)) { $importance = "该信息提供了可追踪的变化信号。" }
+
+  $evidenceNote = Get-OptionalText -Obj $i -Name "llm_evidence_note"
+  if ([string]::IsNullOrWhiteSpace($evidenceNote)) { $evidenceNote = "基于腾讯研究院页面摘要，建议打开原文核验关键表述。" }
+
+  $careerHint = Get-OptionalText -Obj $i -Name "llm_career_hint"
+  if ([string]::IsNullOrWhiteSpace($careerHint)) { $careerHint = "转成岗位能力要求，再决定学习投入。" }
+
+  $investHint = Get-OptionalText -Obj $i -Name "llm_invest_hint"
+  if ([string]::IsNullOrWhiteSpace($investHint)) { $investHint = "优先看产业链受益路径，不做买卖建议。" }
+
+  $todayAction = Get-OptionalText -Obj $i -Name "llm_today_action"
+  if ([string]::IsNullOrWhiteSpace($todayAction)) { $todayAction = "把这条信息改写成四行事实卡片。" }
+
+  $unknowns = Get-OptionalText -Obj $i -Name "llm_unknowns"
+  if ([string]::IsNullOrWhiteSpace($unknowns)) { $unknowns = "关键细节仍需结合原文进一步确认。" }
+
+  $confidence = Normalize-Confidence -Value (Get-OptionalText -Obj $i -Name "llm_confidence")
+
+  $score = 0
+  switch ($confidence) {
+    "高" { $score += 30 }
+    "中" { $score += 20 }
+    default { $score += 10 }
+  }
+  if ($ageDays -le 1) { $score += 10 }
+  elseif ($ageDays -le 7) { $score += 7 }
+  elseif ($ageDays -le 30) { $score += 4 }
+  elseif ($ageDays -gt 180) { $score -= 5 }
+
+  $cards += [pscustomobject]@{
     title = $title
     source = $source
-    host = $sourceHost
-    time = $time
     link = $link
-    snippet = $snippet
     ageDays = $ageDays
     recency = Get-RecencyLabel -AgeDays $ageDays
-    score = $score
-    tier = $tier
     confidence = $confidence
-    fact = $llmSummary
-    action = $llmAction
-    invest = $llmInvest
-    llmSummary = $llmSummary
-    llmAction = $llmAction
-    llmInvest = $llmInvest
-    llmConfidence = $llmConfidence
+    atomicFact = $atomicFact
+    importance = $importance
+    evidenceNote = $evidenceNote
+    careerHint = $careerHint
+    investHint = $investHint
+    todayAction = $todayAction
+    unknowns = $unknowns
+    score = $score
   }
 }
-if ($ranked.Count -eq 0) {
-  Write-Error "Pure-LLM mode requires llm-enriched items, but none were found."
+
+if ($cards.Count -eq 0) {
+  Write-Error "No usable cards after normalization."
   exit 1
 }
 
-$ordered = @($ranked | Sort-Object @{Expression="score";Descending=$true}, @{Expression="time";Descending=$true})
-$fresh = @($ordered | Where-Object { $_.ageDays -le 30 -and $_.confidence -ne "低" })
-$priority = @($ordered | Where-Object { ($_.tier -eq "S" -or $_.tier -eq "A") -and $_.ageDays -le 30 })
-if ($priority.Count -eq 0) { $priority = @($fresh | Where-Object { $_.tier -eq "B" }) }
-$focus = @($priority | Select-Object -First 3)
-$background = @($ordered | Where-Object { $_.ageDays -gt 30 -and $_.confidence -ne "低" } | Select-Object -First 1)
+$ordered = @($cards | Sort-Object @{Expression="score";Descending=$true}, @{Expression="ageDays";Descending=$false})
+$factCards = @($ordered | Select-Object -First 4)
 
-$sCount = @($ordered | Where-Object { $_.tier -eq "S" }).Count
-$aCount = @($ordered | Where-Object { $_.tier -eq "A" }).Count
-$bCount = @($ordered | Where-Object { $_.tier -eq "B" }).Count
-$cCount = @($ordered | Where-Object { $_.tier -eq "C" }).Count
+$overview = @()
+if ($null -ne $doc.PSObject.Properties["llm_distilled_overview"]) {
+  foreach ($x in @($doc.llm_distilled_overview)) {
+    $v = NText -Text ([string]$x)
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $overview += $v }
+  }
+}
+if ($overview.Count -eq 0) {
+  $overview = @("今天优先看已核验事实，再决定行动。", "老信息只做背景，不直接触发动作。")
+}
 
-$recent7Count = @($ordered | Where-Object { $_.ageDays -le 7 }).Count
-$historyCount = @($ordered | Where-Object { $_.ageDays -gt 30 }).Count
+$signals = @()
+if ($null -ne $doc.PSObject.Properties["llm_theme_signals"]) {
+  foreach ($s in @($doc.llm_theme_signals)) {
+    $signal = NText -Text ([string]$s.signal)
+    if ([string]::IsNullOrWhiteSpace($signal)) { continue }
+    $signals += [pscustomobject]@{
+      signal = $signal
+      why = NText -Text ([string]$s.why)
+      how = NText -Text ([string]$s.how_to_use)
+    }
+  }
+}
+if ($signals.Count -eq 0) {
+  $signals = @([pscustomobject]@{
+    signal = "今天未形成高一致性的跨条信号"
+    why = "当前素材时间分布较散，信息增量有限。"
+    how = "先维护来源与核验清单，等待下一批增量。"
+  })
+}
+
+$decisionCards = @()
+if ($null -ne $doc.PSObject.Properties["llm_decision_cards"]) {
+  foreach ($c in @($doc.llm_decision_cards)) {
+    $ifText = NText -Text ([string]$c.if)
+    $thenText = NText -Text ([string]$c.then)
+    if ([string]::IsNullOrWhiteSpace($ifText) -or [string]::IsNullOrWhiteSpace($thenText)) { continue }
+    $decisionCards += [pscustomobject]@{
+      if = $ifText
+      then = $thenText
+      metric = NText -Text ([string]$c.metric)
+    }
+  }
+}
+if ($decisionCards.Count -eq 0) {
+  $decisionCards = @([pscustomobject]@{
+    if = "如果同一主题在一周内连续出现并且原文可核验"
+    then = "将其加入重点学习/研究列表并安排时间"
+    metric = "连续出现次数、原文可核验程度"
+  })
+}
+
+$noiseFilters = @()
+if ($null -ne $doc.PSObject.Properties["llm_noise_filters"]) {
+  foreach ($n in @($doc.llm_noise_filters)) {
+    $v = NText -Text ([string]$n)
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $noiseFilters += $v }
+  }
+}
+if ($noiseFilters.Count -eq 0) {
+  $noiseFilters = @(
+    "只含观点没有出处的内容先放观察池。",
+    "时间过旧且无新增证据的内容降权处理。"
+  )
+}
+
+$todayPlan = @()
+if ($null -ne $doc.PSObject.Properties["llm_today_plan"]) {
+  foreach ($a in @($doc.llm_today_plan)) {
+    $v = NText -Text ([string]$a)
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $todayPlan += $v }
+  }
+}
+if ($todayPlan.Count -eq 0) {
+  $todayPlan = @("核验1条最相关信息并写成事实卡片。", "把今天不确定信息整理到明日待验证列表。")
+} elseif ($todayPlan.Count -eq 1) {
+  $todayPlan += "把今天不确定信息整理到明日待验证列表。"
+} elseif ($todayPlan.Count -gt 2) {
+  $todayPlan = @($todayPlan | Select-Object -First 2)
+}
 
 $lines = New-Object System.Collections.Generic.List[string]
-$lines.Add("【一眼结论】")
-if ($llmDailyOverview.Count -gt 0) {
-  foreach ($x in ($llmDailyOverview | Select-Object -First 2)) {
-    $lines.Add("- " + (NText -Text $x))
-  }
-} elseif ($focus.Count -eq 0) {
-  $lines.Add("- 今日未抓到可直接行动的高价值增量。")
-} else {
-  $lines.Add("- 今日可执行重点：" + $focus.Count + " 条（已压缩成最小可读版本）。")
+$lines.Add("【提纯总览】")
+foreach ($x in ($overview | Select-Object -First 2)) {
+  $lines.Add("- " + $x)
 }
-$lines.Add("- 分级总览：S " + $sCount + " | A " + $aCount + " | B " + $bCount + " | C " + $cCount)
-$lines.Add("- 时效总览：近7天 " + $recent7Count + " 条 | 历史参考 " + $historyCount + " 条")
+$lines.Add("- 方法：事实提纯 -> 证据说明 -> 模式信号 -> 行动清单")
 $lines.Add("--------------------------")
 
-$lines.Add("【三条重点】")
-if ($focus.Count -eq 0) {
-  $lines.Add("- 暂无（今日未抓到可执行的新鲜增量）")
-  if ($background.Count -gt 0) {
-    $lines.Add("- 背景补课（非今日）：[" + $background[0].recency + "] " + $background[0].title)
-    $bgFact = $background[0].llmSummary
-    $bgAction = $background[0].llmAction
-    $lines.Add("  关键点：" + $bgFact)
-    $lines.Add("  你能立刻做：" + $bgAction)
-    $lines.Add("  来源：" + $background[0].source + " | " + $background[0].link)
-  }
-} else {
-  foreach ($it in $focus) {
-    $factText = $it.llmSummary
-    $actionText = $it.llmAction
-    $investText = $it.llmInvest
-    $lines.Add("- [" + $it.tier + "][" + $it.recency + "] " + $it.title)
-    $lines.Add("  关键点：" + $factText)
-    $lines.Add("  你能立刻做：" + $actionText)
-    $lines.Add("  投资观察：" + $investText)
-    $lines.Add("  来源：" + $it.source + " | " + $it.link)
-    $lines.Add("")
-  }
+$lines.Add("【模式信号】")
+foreach ($s in ($signals | Select-Object -First 3)) {
+  $lines.Add("- 信号：" + $s.signal)
+  if (-not [string]::IsNullOrWhiteSpace($s.why)) { $lines.Add("  原因：" + $s.why) }
+  if (-not [string]::IsNullOrWhiteSpace($s.how)) { $lines.Add("  用法：" + $s.how) }
 }
-
-$lines.Add("--------------------------")
-$lines.Add("【S/A/B/C 看板】")
-$topS = @($ordered | Where-Object { $_.tier -eq "S" -and $_.ageDays -le 30 } | Select-Object -First 1)
-$topA = @($ordered | Where-Object { $_.tier -eq "A" -and $_.ageDays -le 30 } | Select-Object -First 1)
-$topB = @($ordered | Where-Object { $_.tier -eq "B" -and $_.ageDays -le 30 } | Select-Object -First 1)
-
-if ($topS.Count -gt 0) { $lines.Add("- S级代表：" + $topS[0].title + "（" + $topS[0].recency + "）") } else { $lines.Add("- S级代表：暂无") }
-if ($topA.Count -gt 0) { $lines.Add("- A级代表：" + $topA[0].title + "（" + $topA[0].recency + "）") } else { $lines.Add("- A级代表：暂无") }
-if ($topB.Count -gt 0) { $lines.Add("- B级代表：" + $topB[0].title + "（" + $topB[0].recency + "）") } else { $lines.Add("- B级代表：暂无") }
-$lines.Add("- C级说明：主要为低证据或受限来源，默认不展开。")
 $lines.Add("--------------------------")
 
-$lines.Add("【今天只做这2件事】")
-$action1 = if ($focus.Count -gt 0) { $focus[0].llmAction } else { "复盘今天信息，并等待明日新增。" }
-$action2 = "把历史参考内容和今日增量分开看，避免被旧内容占用注意力。"
-$lines.Add("- " + $action1)
-$lines.Add("- " + $action2)
+$lines.Add("【事实卡片】")
+foreach ($c in $factCards) {
+  $lines.Add("- [" + $c.recency + "][置信" + $c.confidence + "] " + $c.title)
+  $lines.Add("  原子事实：" + $c.atomicFact)
+  $lines.Add("  重要性：" + $c.importance)
+  $lines.Add("  证据说明：" + $c.evidenceNote)
+  $lines.Add("  职业借鉴：" + $c.careerHint)
+  $lines.Add("  投资观察：" + $c.investHint)
+  $lines.Add("  今日动作：" + $c.todayAction)
+  $lines.Add("  未知点：" + $c.unknowns)
+  $lines.Add("  来源：" + $c.source + " | " + $c.link)
+  $lines.Add("")
+}
+$lines.Add("--------------------------")
+
+$lines.Add("【决策卡片】")
+foreach ($d in ($decisionCards | Select-Object -First 3)) {
+  $lines.Add("- 如果：" + $d.if)
+  $lines.Add("  那么：" + $d.then)
+  if (-not [string]::IsNullOrWhiteSpace($d.metric)) { $lines.Add("  观察指标：" + $d.metric) }
+}
+$lines.Add("--------------------------")
+
+$lines.Add("【去噪规则】")
+foreach ($n in ($noiseFilters | Select-Object -First 3)) {
+  $lines.Add("- " + $n)
+}
+$lines.Add("--------------------------")
+
+$lines.Add("【今日执行清单】")
+$lines.Add("- " + $todayPlan[0])
+$lines.Add("- " + $todayPlan[1])
 
 Set-Content -Path $reportPath -Value ($lines -join "`r`n") -Encoding UTF8
 Write-Output $reportPath

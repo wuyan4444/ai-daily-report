@@ -4,10 +4,17 @@ Cloud-run AI daily report website + Feishu link push.
 
 ## What this repo does
 - Runs daily at **09:00 China time** (`01:00 UTC`) via GitHub Actions.
-- Collects AI updates from **Tencent Research AI&S**.
+- Collects AI updates from **Tencent Research AI&S** (prioritizing `AI每日速递/每日动态/九宫格` style posts when available).
 - Builds a concise Chinese report.
 - Generates a web page (`index.html`) and archive page (`report-pages/ai-daily-brief-YYYY-MM-DD.html`).
 - Pushes only the report link to Feishu webhook.
+
+## Distillation method (v2)
+The report uses a 4-layer distillation workflow:
+- `L1 事实层`: turn each source item into an atomic fact card.
+- `L2 证据说明`: explain source evidence and uncertainty for each card.
+- `L3 模式信号`: keep only cross-item signals worth tracking.
+- `L4 行动清单`: produce 2 concrete actions for today.
 
 ## One-time setup
 

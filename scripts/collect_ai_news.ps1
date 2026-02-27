@@ -109,7 +109,6 @@ function Collect-TencentTisi {
 
     $blocks = [regex]::Matches($html, '<h3 class="elementor-post__title">.*?</article>', [System.Text.RegularExpressions.RegexOptions]::Singleline)
     foreach ($b in $blocks) {
-      if ($result.Count -ge $Limit) { break }
       $block = $b.Value
 
       $linkMatch = [regex]::Match($block, 'href="(https://tisi.org/\d+/)"')
@@ -123,9 +122,7 @@ function Collect-TencentTisi {
       }
 
       $title = Decode-Text -Text $titleMatch.Groups[1].Value
-      if (-not (In-DateWindow -PublishedLocal $publishedLocal -StartDate $StartDate -NextDate $NextDate)) {
-        $title = "[Recent] " + $title
-      }
+      $isDailyDigest = ($title -match "AI每日速递|每日速递|每日动态|九宫格")
 
       $link = $linkMatch.Groups[1].Value
       $snippet = Get-TencentArticleSnippet -ArticleUrl $link
@@ -136,12 +133,20 @@ function Collect-TencentTisi {
         link = $link
         published_local = $publishedLocal
         snippet = $snippet
+        is_daily_digest = $isDailyDigest
       }
     }
-    if ($result.Count -ge $Limit) { break }
   }
 
-  return @($result)
+  $ordered = @(
+    $result |
+      Sort-Object `
+        @{ Expression = { if ($_.is_daily_digest) { 1 } else { 0 } }; Descending = $true }, `
+        @{ Expression = { if ($null -eq $_.published_local) { [datetime]::MinValue } else { $_.published_local } }; Descending = $true }, `
+        @{ Expression = { $_.title }; Descending = $false }
+  )
+
+  return @($ordered | Select-Object -First $Limit)
 }
 
 $allItems = @()

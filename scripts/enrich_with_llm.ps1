@@ -1,7 +1,7 @@
 ﻿param(
   [string]$Date = (Get-Date -Format "yyyy-MM-dd"),
   [string]$InputDir = "data",
-  [int]$MaxItems = 4,
+  [int]$MaxItems = 6,
   [string]$LlmApiKey = $env:LLM_API_KEY,
   [string]$LlmBaseUrl = $(if ([string]::IsNullOrWhiteSpace($env:LLM_BASE_URL)) { "https://api.openai.com/v1" } else { $env:LLM_BASE_URL }),
   [string]$LlmModel = $(if ([string]::IsNullOrWhiteSpace($env:LLM_MODEL)) { "gpt-4o-mini" } else { $env:LLM_MODEL })
@@ -38,6 +38,13 @@ function Parse-DateSafe {
   try { return [datetime]::Parse($Text) } catch { return $null }
 }
 
+function Normalize-Confidence {
+  param([string]$Value)
+  $v = NText -Text $Value
+  if ($v -eq "高" -or $v -eq "中" -or $v -eq "低") { return $v }
+  return "中"
+}
+
 function Invoke-LlmJson {
   param(
     [string]$Prompt,
@@ -56,7 +63,7 @@ function Invoke-LlmJson {
     )
   }
 
-  $json = $payload | ConvertTo-Json -Depth 8
+  $json = $payload | ConvertTo-Json -Depth 10
   $headers = @{ Authorization = "Bearer $ApiKey" }
 
   try {
@@ -78,6 +85,23 @@ function Invoke-LlmJson {
     }
   }
 
+  return $null
+}
+
+function Invoke-LlmJsonWithRetry {
+  param(
+    [string]$Prompt,
+    [string]$ApiKey,
+    [string]$BaseUrl,
+    [string]$Model,
+    [int]$RetryCount = 2
+  )
+
+  for ($i = 0; $i -le $RetryCount; $i++) {
+    $res = Invoke-LlmJson -Prompt $Prompt -ApiKey $ApiKey -BaseUrl $BaseUrl -Model $Model
+    if ($null -ne $res) { return $res }
+    if ($i -lt $RetryCount) { Start-Sleep -Seconds 2 }
+  }
   return $null
 }
 
@@ -105,69 +129,183 @@ foreach ($it in $candidates) {
   $title = NText -Text ([string]$it.title)
   $snippet = NText -Text ([string]$it.snippet)
   $link = NText -Text ([string]$it.link)
+  $source = NText -Text ([string]$it.source_label)
+  $time = NText -Text ([string]$it.published_at_local)
 
   $prompt = @"
-请基于以下素材输出JSON，字段必须为：summary, action, invest, confidence。
-要求：
-1) summary：40字内，写核心结论（避免空话）。
-2) action：35字内，给我今天能执行的一步。
-3) invest：35字内，给观察角度，不给买卖建议。
-4) confidence：只能是 高 / 中 / 低。
-5) 若证据不足，明确写在summary里并降低confidence。
+你是“信息提纯编辑器”。请对单条素材做提纯，只输出 JSON 对象：
+{
+  "atomic_fact": "15-50字，描述可核验的核心事实",
+  "importance": "15-40字，说明为什么重要",
+  "evidence_note": "20-50字，说明证据来源与局限",
+  "career_hint": "15-35字，对职业发展启发",
+  "invest_hint": "15-35字，对投资研究观察（非买卖建议）",
+  "today_action": "10-30字，今天可执行的一步",
+  "unknowns": "10-30字，尚不确定点",
+  "confidence": "高|中|低"
+}
 
+要求：
+1) 不要输出评级字母，不要输出分数。
+2) 若证据不足，要在 evidence_note 和 unknowns 中明确写出。
+3) 不要复述空话，不要给宏大判断。
+
+素材：
 标题：$title
 摘要：$snippet
+来源：$source
+发布时间：$time
 链接：$link
 "@
 
-  $parsed = Invoke-LlmJson -Prompt $prompt -ApiKey $LlmApiKey -BaseUrl $LlmBaseUrl -Model $LlmModel
+  $parsed = Invoke-LlmJsonWithRetry -Prompt $prompt -ApiKey $LlmApiKey -BaseUrl $LlmBaseUrl -Model $LlmModel
   if ($null -eq $parsed) {
-    Write-Error ("LLM parsing failed for item: " + $title)
-    exit 1
+    Write-Warning ("LLM parsing failed for item, fallback applied: " + $title)
+    $parsed = [pscustomobject]@{
+      atomic_fact = $title
+      importance = "该信息提供了可追踪的变化线索。"
+      evidence_note = "本条由系统降级生成，请打开原文核验。"
+      career_hint = "先抽取岗位相关能力变化再行动。"
+      invest_hint = "先看产业链信号，不做买卖建议。"
+      today_action = "提炼4行事实卡片并核对原文。"
+      unknowns = "关键细节待进一步核验。"
+      confidence = "低"
+    }
   }
 
-  $it | Add-Member -NotePropertyName llm_summary -NotePropertyValue (NText -Text ([string]$parsed.summary)) -Force
-  $it | Add-Member -NotePropertyName llm_action -NotePropertyValue (NText -Text ([string]$parsed.action)) -Force
-  $it | Add-Member -NotePropertyName llm_invest -NotePropertyValue (NText -Text ([string]$parsed.invest)) -Force
-  $it | Add-Member -NotePropertyName llm_confidence -NotePropertyValue (NText -Text ([string]$parsed.confidence)) -Force
+  $atomicFact = NText -Text ([string]$parsed.atomic_fact)
+  if ([string]::IsNullOrWhiteSpace($atomicFact)) { $atomicFact = $title }
+
+  $it | Add-Member -NotePropertyName llm_atomic_fact -NotePropertyValue $atomicFact -Force
+  $it | Add-Member -NotePropertyName llm_importance -NotePropertyValue (NText -Text ([string]$parsed.importance)) -Force
+  $it | Add-Member -NotePropertyName llm_evidence_note -NotePropertyValue (NText -Text ([string]$parsed.evidence_note)) -Force
+  $it | Add-Member -NotePropertyName llm_career_hint -NotePropertyValue (NText -Text ([string]$parsed.career_hint)) -Force
+  $it | Add-Member -NotePropertyName llm_invest_hint -NotePropertyValue (NText -Text ([string]$parsed.invest_hint)) -Force
+  $it | Add-Member -NotePropertyName llm_today_action -NotePropertyValue (NText -Text ([string]$parsed.today_action)) -Force
+  $it | Add-Member -NotePropertyName llm_unknowns -NotePropertyValue (NText -Text ([string]$parsed.unknowns)) -Force
+  $it | Add-Member -NotePropertyName llm_confidence -NotePropertyValue (Normalize-Confidence -Value ([string]$parsed.confidence)) -Force
+
+  # Keep a compatibility field for older readers.
+  $it | Add-Member -NotePropertyName llm_summary -NotePropertyValue $atomicFact -Force
 }
 
 $overviewInput = New-Object System.Collections.Generic.List[string]
 foreach ($it in ($items | Select-Object -First 8)) {
   $title = NText -Text ([string]$it.title)
-  $snippet = NText -Text ([string]$it.snippet)
   if ([string]::IsNullOrWhiteSpace($title)) { continue }
-  $overviewInput.Add("- " + $title + " | " + $snippet)
+  $fact = NText -Text ([string]$it.llm_atomic_fact)
+  if ([string]::IsNullOrWhiteSpace($fact)) { $fact = NText -Text ([string]$it.snippet) }
+  $evidence = NText -Text ([string]$it.llm_evidence_note)
+  $confidence = Normalize-Confidence -Value ([string]$it.llm_confidence)
+  $overviewInput.Add("- 标题：" + $title + " | 事实：" + $fact + " | 证据说明：" + $evidence + " | 置信：" + $confidence)
 }
 
 if ($overviewInput.Count -gt 0) {
   $overviewPrompt = @"
-请对下面材料做“今日一眼结论”，输出JSON：{"overview":["...","..."]}
+你是“提纯主编”，请对当天素材做跨条提纯，只输出 JSON：
+{
+  "distilled_overview": ["...","..."],
+  "theme_signals": [
+    {
+      "signal": "趋势信号",
+      "why": "为什么值得关注",
+      "how_to_use": "如何在工作中使用"
+    }
+  ],
+  "decision_cards": [
+    {
+      "if": "如果出现什么条件",
+      "then": "我该怎么做",
+      "metric": "观察指标"
+    }
+  ],
+  "noise_filters": ["今天应过滤的噪音类型"],
+  "today_plan": ["今天动作1","今天动作2"]
+}
+
 要求：
-1) 两条以内，每条不超过45字。
-2) 必须是可执行、可判断的结论，不要空话。
-3) 如果今天没有新增高价值信息，明确写出来。
+1) 不要使用字母分级和分数。
+2) distilled_overview 最多2条，每条不超过45字。
+3) theme_signals 1-3条，必须是跨多条素材共性的信号。
+4) decision_cards 1-3条，强调“条件 -> 动作”。
+5) today_plan 恰好2条，必须可执行。
 
 素材：
-$($overviewInput -join "`n")
+$($overviewInput -join "`r`n")
 "@
-  $ov = Invoke-LlmJson -Prompt $overviewPrompt -ApiKey $LlmApiKey -BaseUrl $LlmBaseUrl -Model $LlmModel
-  if ($null -eq $ov -or $null -eq $ov.overview) {
-    Write-Error "LLM daily overview generation failed."
-    exit 1
+
+  $ov = Invoke-LlmJsonWithRetry -Prompt $overviewPrompt -ApiKey $LlmApiKey -BaseUrl $LlmBaseUrl -Model $LlmModel
+  if ($null -eq $ov) {
+    Write-Warning "LLM distilled overview generation failed, fallback applied."
+    $ov = [pscustomobject]@{
+      distilled_overview = @("今日提纯生成已降级，建议优先核验原文。")
+      theme_signals = @()
+      decision_cards = @()
+      noise_filters = @("模型输出异常时，先看原文再做判断。")
+      today_plan = @("核验1条最相关原文并更新事实卡片。", "把不确定信息放入明日待验证列表。")
+    }
   }
-  $arr = @()
-  foreach ($x in @($ov.overview)) {
+
+  $distilledOverview = @()
+  foreach ($x in @($ov.distilled_overview)) {
     $v = NText -Text ([string]$x)
-    if (-not [string]::IsNullOrWhiteSpace($v)) { $arr += $v }
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $distilledOverview += $v }
   }
-  if ($arr.Count -eq 0) {
-    Write-Error "LLM daily overview is empty."
-    exit 1
+  if ($distilledOverview.Count -eq 0) {
+    $distilledOverview = @("今日暂无高置信新增，优先复盘已验证主线。")
   }
-  $doc | Add-Member -NotePropertyName llm_daily_overview -NotePropertyValue $arr -Force
+
+  $themeSignals = @()
+  foreach ($p in @($ov.theme_signals)) {
+    $signal = NText -Text ([string]$p.signal)
+    if ([string]::IsNullOrWhiteSpace($signal)) { continue }
+    $themeSignals += [pscustomobject]@{
+      signal = $signal
+      why = NText -Text ([string]$p.why)
+      how_to_use = NText -Text ([string]$p.how_to_use)
+    }
+  }
+
+  $decisionCards = @()
+  foreach ($c in @($ov.decision_cards)) {
+    $ifText = NText -Text ([string]$c.if)
+    $thenText = NText -Text ([string]$c.then)
+    if ([string]::IsNullOrWhiteSpace($ifText) -or [string]::IsNullOrWhiteSpace($thenText)) { continue }
+    $decisionCards += [pscustomobject]@{
+      if = $ifText
+      then = $thenText
+      metric = NText -Text ([string]$c.metric)
+    }
+  }
+
+  $noiseFilters = @()
+  foreach ($n in @($ov.noise_filters)) {
+    $v = NText -Text ([string]$n)
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $noiseFilters += $v }
+  }
+  if ($noiseFilters.Count -gt 3) { $noiseFilters = @($noiseFilters | Select-Object -First 3) }
+
+  $todayPlan = @()
+  foreach ($a in @($ov.today_plan)) {
+    $v = NText -Text ([string]$a)
+    if (-not [string]::IsNullOrWhiteSpace($v)) { $todayPlan += $v }
+  }
+  if ($todayPlan.Count -eq 0) {
+    $todayPlan = @("整理1条信息成事实卡片并核验来源。", "将未核实观点放入观察池，不立即行动。")
+  } elseif ($todayPlan.Count -eq 1) {
+    $todayPlan += "将未核实观点放入观察池，不立即行动。"
+  } elseif ($todayPlan.Count -gt 2) {
+    $todayPlan = @($todayPlan | Select-Object -First 2)
+  }
+
+  $doc | Add-Member -NotePropertyName llm_distilled_overview -NotePropertyValue $distilledOverview -Force
+  $doc | Add-Member -NotePropertyName llm_theme_signals -NotePropertyValue $themeSignals -Force
+  $doc | Add-Member -NotePropertyName llm_decision_cards -NotePropertyValue $decisionCards -Force
+  $doc | Add-Member -NotePropertyName llm_noise_filters -NotePropertyValue $noiseFilters -Force
+  $doc | Add-Member -NotePropertyName llm_today_plan -NotePropertyValue $todayPlan -Force
+  $doc | Add-Member -NotePropertyName llm_method -NotePropertyValue "distill-v2" -Force
 }
 
 $doc.items = $items
-$doc | ConvertTo-Json -Depth 8 | Set-Content -Path $inputPath -Encoding UTF8
+$doc | ConvertTo-Json -Depth 10 | Set-Content -Path $inputPath -Encoding UTF8
 Write-Output $inputPath
