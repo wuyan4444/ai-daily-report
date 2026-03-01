@@ -1,0 +1,77 @@
+﻿{
+    "date":  "2026-03-01",
+    "generated_at_local":  "2026-03-01 03:40:20",
+    "item_count":  0,
+    "source":  "youtube",
+    "collection_warnings":  [
+                                "Channel \u0027原话说\u0027 has no usable subtitles in recent videos and is not suitable for this automation.",
+                                "Channel \u0027MoneyXYZ\u0027 has no usable subtitles in recent videos and is not suitable for this automation.",
+                                "Channel \u0027Dan Koe Talks\u0027 has no usable subtitles in recent videos and is not suitable for this automation.",
+                                "Channel \u0027Dr.Xiaohui\u0027 has no usable subtitles in recent videos and is not suitable for this automation.",
+                                "Channel \u0027StorytellerFan\u0027 has no usable subtitles in recent videos and is not suitable for this automation.",
+                                "No subtitle-qualified videos were collected today. Replace channels or add subtitle-friendly sources."
+                            ],
+    "source_stats":  [
+                         {
+                             "channel_name":  "原话说",
+                             "channel_id":  "UCwJ0n9_0ztZdtUJ7qjePStA",
+                             "scanned":  5,
+                             "with_subtitle":  0,
+                             "without_subtitle":  5,
+                             "kept":  0
+                         },
+                         {
+                             "channel_name":  "MoneyXYZ",
+                             "channel_id":  "UCh4QrR5V6reIojGpRqkTbYw",
+                             "scanned":  5,
+                             "with_subtitle":  0,
+                             "without_subtitle":  5,
+                             "kept":  0
+                         },
+                         {
+                             "channel_name":  "Dan Koe Talks",
+                             "channel_id":  "UCWXYDYv5STLk-zoxMP2I1Lw",
+                             "scanned":  5,
+                             "with_subtitle":  0,
+                             "without_subtitle":  5,
+                             "kept":  0
+                         },
+                         {
+                             "channel_name":  "Dr.Xiaohui",
+                             "channel_id":  "UCIFQugnADjlmYuOn9PkcB2A",
+                             "scanned":  5,
+                             "with_subtitle":  0,
+                             "without_subtitle":  5,
+                             "kept":  0
+                         },
+                         {
+                             "channel_name":  "StorytellerFan",
+                             "channel_id":  "UCUGLhcs3-3y_yhZZsgRzrzw",
+                             "scanned":  5,
+                             "with_subtitle":  0,
+                             "without_subtitle":  5,
+                             "kept":  0
+                         }
+                     ],
+    "items":  [
+
+              ],
+    "llm_distilled_overview":  [
+                                   "今日未采集到可用字幕视频，自动提纯已跳过。",
+                                   "采集提醒：Channel \u0027原话说\u0027 has no usable subtitles in recent videos and is not suitable for this automation."
+                               ],
+    "llm_theme_signals":  [
+
+                          ],
+    "llm_decision_cards":  [
+
+                           ],
+    "llm_noise_filters":  [
+                              "先确保来源有字幕，再进行自动提纯。"
+                          ],
+    "llm_today_plan":  [
+                           "替换或新增至少1个带字幕的YouTube频道。",
+                           "手动补充1条带字幕视频链接做验证。"
+                       ],
+    "llm_method":  "distill-v2-no-items"
+}
